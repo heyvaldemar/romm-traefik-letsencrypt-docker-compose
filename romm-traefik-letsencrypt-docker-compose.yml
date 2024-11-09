@@ -1,0 +1,301 @@
+# RomM with Let's Encrypt Using Docker Compose
+
+# The complete installation guide is available on my website https://www.heyvaldemar.com/install-romm-using-docker-compose/
+
+# Change variables in the `.env` to meet your requirements.
+
+# The values for `ROMM_AUTH_SECRET_KEY` can be generated using the command:
+# `openssl rand -hex 32`
+
+# Generate an API key at [MobyGames](https://www.mobygames.com/info/api/) and assign it to `ROMM_MOBYGAMES_API_KEY`.
+# Generate an API key at [SteamGridDB](https://www.steamgriddb.com/profile/preferences/api) and assign it to `ROMM_STEAMGRIDDB_API_KEY`.
+
+# Edit the environment variables `ROMM_IGDB_CLIENT_ID` and `ROMM_IGDB_CLIENT_SECRET` to the values retrieved from your IGDB account:
+# 1. Sign up for a free Twitch account.
+# 2. Enable Two-Factor Authentication.
+# 3. Register your application in the Twitch Developer Portal:
+#    - Name your application uniquely.
+#    - Add a URL (it doesn’t have to be valid, just unique).
+#    - Choose a category and set the Client Type to "Confidential."
+# 4. Complete the Captcha and click "Create."
+# 5. Click "Manage" next to your new app to view your client ID (similar to a username).
+# 6. Click "New Secret" to generate a secret key (similar to a password). Note: This secret is shown only once; make sure to record it.
+
+# Note that the `.env` file should be in the same directory as `romm-traefik-letsencrypt-docker-compose.yml`.
+
+# Create networks for your services before deploying the configuration using the commands:
+# `docker network create traefik-network`
+# `docker network create romm-network`
+
+# Deploy RomM using Docker Compose:
+# `docker compose -f romm-traefik-letsencrypt-docker-compose.yml -p romm up -d`
+
+# Docker Volumes Configuration for RomM
+# This section details the Docker volume bindings used by RomM to manage and store various data components:
+# - `romm-data:/romm/resources`: This volume stores resources fetched from IGDB, such as game covers, screenshots, and other media, essential for enriching the game display and user experience.
+# - `redis-data:/redis-data`: Used for caching data essential for the performance of background tasks, improving the efficiency and responsiveness of the application.
+# - `./library:/romm/library`: Maps the local `library` directory to the container, serving as the primary storage for your game library where all game files are accessed and managed.
+# - `./assets:/romm/assets`: Local storage for uploaded game saves, states, and other related assets, ensuring they are persisted and readily accessible.
+# - `./config:/romm/config`: Contains the `config.yml` configuration file, centralizing the application's settings and configurations in a single, easily accessible location.
+# Each volume is mapped to a specific directory inside the container to ensure proper data management and isolation, aligning with RomM’s operational requirements and data handling strategies.
+
+# Backups
+# The `backups` container in the configuration is responsible for the following:
+# 1. **Database Backup**: Creates compressed backups of the MariaDB database using pg_dump.
+# Customizable backup path, filename pattern, and schedule through variables like `MARIADB_BACKUPS_PATH`, `MARIADB_BACKUP_NAME`, and `BACKUP_INTERVAL`.
+# 2. **Application Data Backup**: Compresses and stores backups of the application data on the same schedule. Controlled via variables such as `DATA_BACKUPS_PATH`, `DATA_BACKUP_NAME`, and `BACKUP_INTERVAL`.
+# 3. **Backup Pruning**: Periodically removes backups exceeding a specified age to manage storage.
+# Customizable pruning schedule and age threshold with `MARIADB_BACKUP_PRUNE_DAYS` and `DATA_BACKUP_PRUNE_DAYS`.
+# By utilizing this container, consistent and automated backups of the essential components of your instance are ensured.
+# Moreover, efficient management of backup storage and tailored backup routines can be achieved through easy and flexible configuration using environment variables.
+
+# # romm-restore-database.sh Description
+# This script facilitates the restoration of a database backup.
+# 1. **Identify Containers**: It first identifies the service and backups containers by name, finding the appropriate container IDs.
+# 2. **List Backups**: Displays all available database backups located at the specified backup path.
+# 3. **Select Backup**: Prompts the user to copy and paste the desired backup name from the list to restore the database.
+# 4. **Stop Service**: Temporarily stops the service to ensure data consistency during restoration.
+# 5. **Restore Database**: Executes a sequence of commands to drop the current database, create a new one, and restore it from the selected compressed backup file.
+# 6. **Start Service**: Restarts the service after the restoration is completed.
+# To make the `romm-restore-database.shh` script executable, run the following command:
+# `chmod +x romm-restore-database.sh`
+# Usage of this script ensures a controlled and guided process to restore the database from an existing backup.
+
+# # romm-restore-application-data.sh Description
+# This script is designed to restore the application data.
+# 1. **Identify Containers**: Similarly to the database restore script, it identifies the service and backups containers by name.
+# 2. **List Application Data Backups**: Displays all available application data backups at the specified backup path.
+# 3. **Select Backup**: Asks the user to copy and paste the desired backup name for application data restoration.
+# 4. **Stop Service**: Stops the service to prevent any conflicts during the restore process.
+# 5. **Restore Application Data**: Removes the current application data and then extracts the selected backup to the appropriate application data path.
+# 6. **Start Service**: Restarts the service after the application data has been successfully restored.
+# To make the `romm-restore-application-data.sh` script executable, run the following command:
+# `chmod +x romm-restore-application-data.sh`
+# By utilizing this script, you can efficiently restore application data from an existing backup while ensuring proper coordination with the running service.
+
+# Author
+# I’m Vladimir Mikhalev, the Docker Captain, but my friends can call me Valdemar.
+# https://www.docker.com/captains/vladimir-mikhalev/
+
+# My website with detailed IT guides: https://www.heyvaldemar.com/
+# Follow me on YouTube: https://www.youtube.com/channel/UCf85kQ0u1sYTTTyKVpxrlyQ?sub_confirmation=1
+# Follow me on Twitter: https://twitter.com/heyValdemar
+# Follow me on Instagram: https://www.instagram.com/heyvaldemar/
+# Follow me on Threads: https://www.threads.net/@heyvaldemar
+# Follow me on Mastodon: https://mastodon.social/@heyvaldemar
+# Follow me on Bluesky: https://bsky.app/profile/heyvaldemar.bsky.social
+# Follow me on Facebook: https://www.facebook.com/heyValdemarFB/
+# Follow me on TikTok: https://www.tiktok.com/@heyvaldemar
+# Follow me on LinkedIn: https://www.linkedin.com/in/heyvaldemar/
+# Follow me on GitHub: https://github.com/heyvaldemar
+
+# Communication
+# Chat with IT pros on Discord: https://discord.gg/AJQGCCBcqf
+# Reach me at ask@sre.gg
+
+# Give Thanks
+# Support on GitHub: https://github.com/sponsors/heyValdemar
+# Support on Patreon: https://www.patreon.com/heyValdemar
+# Support on BuyMeaCoffee: https://www.buymeacoffee.com/heyValdemar
+# Support on Ko-fi: https://ko-fi.com/heyValdemar
+# Support on PayPal: https://www.paypal.com/paypalme/heyValdemarCOM
+
+# # Disclaimer
+# This repository contains a Docker Compose configuration that references third-party Docker images.
+# **I am not the creator or maintainer of these images** and have no control over their content. By using this configuration, you acknowledge that:
+# 1. **You are solely responsible** for verifying the contents, licensing, and legality of any third-party Docker images referenced in this repository.
+# 2. This configuration does **not include any ROM, BIOS, or other copyrighted files**.
+# You are responsible for ensuring that any files you use comply with applicable licensing and copyright laws.
+# 3. **No liability** is assumed for any legal issues or damages that arise from the use or misuse of this configuration and the images it references.
+# Please review all relevant licensing terms and only proceed if you have the legal right to use all components.
+
+networks:
+  romm-network:
+    external: true
+  traefik-network:
+    external: true
+
+volumes:
+  mariadb-data:
+  romm-data:
+  redis-data:
+  romm-mariadb-backup:
+  romm-data-backups:
+  romm-database-backups:
+  traefik-certificates:
+
+services:
+  mariadb:
+    image: ${ROMM_MARIADB_IMAGE_TAG}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    environment:
+      MARIADB_DATABASE: ${ROMM_DB_NAME}
+      MARIADB_USER: ${ROMM_DB_USER}
+      MARIADB_PASSWORD: ${ROMM_DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${ROMM_DB_ADMIN_PASSWORD}
+    networks:
+      - romm-network
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  redis:
+    image: ${ROMM_REDIS_IMAGE_TAG}
+    volumes:
+      - redis-data:/data
+    networks:
+      - romm-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  romm:
+    image: ${ROMM_IMAGE_TAG}
+    volumes:
+      - romm-data:/romm/resources
+      - redis-data:/redis-data
+      - ./library:/romm/library
+      - ./assets:/romm/assets
+      - ./config:/romm/config
+    environment:
+      DB_HOST: mariadb
+      DB_NAME: ${ROMM_DB_NAME}
+      DB_USER: ${ROMM_DB_USER}
+      DB_PASSWD: ${ROMM_DB_PASSWORD}
+      ROMM_AUTH_SECRET_KEY: ${ROMM_AUTH_SECRET_KEY}
+      IGDB_CLIENT_ID: ${ROMM_IGDB_CLIENT_ID}
+      IGDB_CLIENT_SECRET: ${ROMM_IGDB_CLIENT_SECRET}
+      MOBYGAMES_API_KEY: ${ROMM_MOBYGAMES_API_KEY}
+      STEAMGRIDDB_API_KEY: ${ROMM_STEAMGRIDDB_API_KEY}
+      SCAN_TIMEOUT: ${ROMM_SCAN_TIMEOUT}
+      ENABLE_SCHEDULED_RESCAN: 'true'
+      SCHEDULED_RESCAN_CRON: ${ROMM_SCHEDULED_RESCAN_CRON}
+      ENABLE_SCHEDULED_UPDATE_SWITCH_TITLEDB: 'true'
+      SCHEDULED_UPDATE_SWITCH_TITLEDB_CRON: ${ROMM_SCHEDULED_UPDATE_SWITCH_TITLEDB_CRON}
+      ENABLE_SCHEDULED_UPDATE_MAME_XML: 'true'
+      SCHEDULED_UPDATE_MAME_XML_CRON: ${ROMM_SCHEDULED_UPDATE_MAME_XML_CRON}
+      TZ: ${ROMM_SERVER_TIMEZONE}
+    networks:
+      - romm-network
+      - traefik-network
+    healthcheck:
+      test: timeout 10s bash -c ':> /dev/tcp/127.0.0.1/8080' || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.romm.rule=Host(`${ROMM_HOSTNAME}`)"
+      - "traefik.http.routers.romm.service=romm"
+      - "traefik.http.routers.romm.entrypoints=websecure"
+      - "traefik.http.services.romm.loadbalancer.server.port=8080"
+      - "traefik.http.routers.romm.tls=true"
+      - "traefik.http.routers.romm.tls.certresolver=letsencrypt"
+      - "traefik.http.services.romm.loadbalancer.passhostheader=true"
+      - "traefik.http.routers.romm.middlewares=compresstraefik"
+      - "traefik.http.middlewares.compresstraefik.compress=true"
+      - "traefik.docker.network=traefik-network"
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+
+  traefik:
+    image: ${TRAEFIK_IMAGE_TAG}
+    command:
+      - "--log.level=${TRAEFIK_LOG_LEVEL}"
+      - "--accesslog=true"
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--ping=true"
+      - "--ping.entrypoint=ping"
+      - "--entryPoints.ping.address=:8082"
+      - "--entryPoints.web.address=:80"
+      - "--entryPoints.websecure.address=:443"
+      - "--providers.docker=true"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.exposedByDefault=false"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme/acme.json"
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.buckets=0.1,0.3,1.2,5.0"
+      - "--global.checkNewVersion=true"
+      - "--global.sendAnonymousUsage=false"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - traefik-certificates:/etc/traefik/acme
+    networks:
+      - traefik-network
+    ports:
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test: ["CMD", "wget", "http://localhost:8082/ping","--spider"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_HOSTNAME}`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.services.dashboard.loadbalancer.server.port=8080"
+      - "traefik.http.routers.dashboard.tls=true"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.services.dashboard.loadbalancer.passhostheader=true"
+      - "traefik.http.routers.dashboard.middlewares=authtraefik"
+      - "traefik.http.middlewares.authtraefik.basicauth.users=${TRAEFIK_BASIC_AUTH}"
+      - "traefik.http.routers.http-catchall.rule=HostRegexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.entrypoints=web"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+    restart: unless-stopped
+
+  backups:
+    image: ${ROMM_MARIADB_IMAGE_TAG}
+    command: >-
+      sh -c 'sleep $BACKUP_INIT_SLEEP &&
+      while true; do
+        mariadb-dump -h mariadb -u $ROMM_DB_USER -p"$ROMM_DB_PASSWORD" $ROMM_DB_NAME | gzip > "$MARIADB_BACKUPS_PATH/$MARIADB_BACKUP_NAME-$(date '+%Y-%m-%d_%H-%M').gz" &&
+        tar -zcpf $DATA_BACKUPS_PATH/$DATA_BACKUP_NAME-$(date "+%Y-%m-%d_%H-%M").tar.gz $DATA_PATH &&
+        find $MARIADB_BACKUPS_PATH -type f -mtime +$MARIADB_BACKUP_PRUNE_DAYS | xargs rm -f &&
+        find $DATA_BACKUPS_PATH -type f -mtime +$DATA_BACKUP_PRUNE_DAYS | xargs rm -f;
+        sleep $BACKUP_INTERVAL; done'
+    volumes:
+      - romm-mariadb-backup:/var/lib/mysql
+      - romm-data:${DATA_PATH}
+      - romm-data-backups:${DATA_BACKUPS_PATH}
+      - romm-database-backups:${MARIADB_BACKUPS_PATH}
+    environment:
+      ROMM_DB_NAME: ${ROMM_DB_NAME}
+      ROMM_DB_USER: ${ROMM_DB_USER}
+      ROMM_DB_PASSWORD: ${ROMM_DB_PASSWORD}
+      BACKUP_INIT_SLEEP: ${BACKUP_INIT_SLEEP}
+      BACKUP_INTERVAL: ${BACKUP_INTERVAL}
+      MARIADB_BACKUP_PRUNE_DAYS: ${MARIADB_BACKUP_PRUNE_DAYS}
+      DATA_BACKUP_PRUNE_DAYS: ${DATA_BACKUP_PRUNE_DAYS}
+      MARIADB_BACKUPS_PATH: ${MARIADB_BACKUPS_PATH}
+      DATA_BACKUPS_PATH: ${DATA_BACKUPS_PATH}
+      DATA_PATH: ${DATA_PATH}
+      MARIADB_BACKUP_NAME: ${MARIADB_BACKUP_NAME}
+      DATA_BACKUP_NAME: ${DATA_BACKUP_NAME}
+    networks:
+      - romm-network
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
