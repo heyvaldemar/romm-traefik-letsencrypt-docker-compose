@@ -194,16 +194,27 @@ services:
       retries: 3
       start_period: 90s
     labels:
+      # Enable Traefik for this container
       - "traefik.enable=true"
+      # Match incoming requests on a specific hostname
       - "traefik.http.routers.romm.rule=Host(`${ROMM_HOSTNAME}`)"
+      # Assign the router to a named Traefik service
       - "traefik.http.routers.romm.service=romm"
+      # Use the 'websecure' (HTTPS) entry point
       - "traefik.http.routers.romm.entrypoints=websecure"
+      # Define the internal container port for routing
       - "traefik.http.services.romm.loadbalancer.server.port=8080"
+      # Enable TLS on this router
       - "traefik.http.routers.romm.tls=true"
+      # Use Let's Encrypt for certificate management
       - "traefik.http.routers.romm.tls.certresolver=letsencrypt"
+      # Pass the original Host header to the container
       - "traefik.http.services.romm.loadbalancer.passhostheader=true"
+      # Apply a compression middleware
       - "traefik.http.routers.romm.middlewares=compresstraefik"
+      # Define settings for the compression middleware
       - "traefik.http.middlewares.compresstraefik.compress=true"
+      # Specify which Docker network Traefik should use for routing
       - "traefik.docker.network=traefik-network"
     restart: unless-stopped
     depends_on:
@@ -215,27 +226,42 @@ services:
   traefik:
     image: ${TRAEFIK_IMAGE_TAG}
     command:
+      # Set the log level (DEBUG, INFO, WARN, ERROR)
       - "--log.level=${TRAEFIK_LOG_LEVEL}"
-      - "--accesslog=true"
+      # Enable the built-in API and web-based dashboard on /dashboard
       - "--api.dashboard=true"
-      - "--api.insecure=true"
+      # Enable the /ping endpoint so we can health-check Traefik
       - "--ping=true"
+      # Assign the /ping endpoint to a dedicated entry point on port 8082
       - "--ping.entrypoint=ping"
-      - "--entryPoints.ping.address=:8082"
-      - "--entryPoints.web.address=:80"
-      - "--entryPoints.websecure.address=:443"
+      - "--entrypoints.ping.address=:8082"
+      # Define the primary HTTP entry point on port 80
+      - "--entrypoints.web.address=:80"
+      # Define the secure (HTTPS) entry point on port 443
+      - "--entrypoints.websecure.address=:443"
+      # Enable the Docker provider to detect containers and their labels
       - "--providers.docker=true"
+      # Point Traefik to the Docker socket
       - "--providers.docker.endpoint=unix:///var/run/docker.sock"
-      - "--providers.docker.exposedByDefault=false"
+      # Prevent automatic exposure of all containers; only expose containers
+      # with "traefik.enable=true"
+      - "--providers.docker.exposedbydefault=false"
+      # Use ACME (Let's Encrypt) to generate/renew certificates via TLS challenge
       - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      # The email address used by Let's Encrypt for renewal notices
       - "--certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL}"
+      # The file where ACME certificates are stored inside the container
       - "--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme/acme.json"
+      # Enable Prometheus metrics
       - "--metrics.prometheus=true"
+      # Configure Prometheus histogram buckets
       - "--metrics.prometheus.buckets=0.1,0.3,1.2,5.0"
+      # Check for newer Traefik versions and optionally log that info
       - "--global.checkNewVersion=true"
-      - "--global.sendAnonymousUsage=false"
+      # Disable sending anonymous usage data to the Traefik maintainers
+      - "--global.sendanonymoususage=false"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik-certificates:/etc/traefik/acme
     networks:
       - traefik-network
@@ -249,16 +275,18 @@ services:
       retries: 3
       start_period: 5s
     labels:
+      # Enable Traefik for this container.
       - "traefik.enable=true"
+      # A router to expose the Traefik dashboard
       - "traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_HOSTNAME}`)"
-      - "traefik.http.routers.dashboard.service=api@internal"
       - "traefik.http.routers.dashboard.entrypoints=websecure"
-      - "traefik.http.services.dashboard.loadbalancer.server.port=8080"
       - "traefik.http.routers.dashboard.tls=true"
       - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
-      - "traefik.http.services.dashboard.loadbalancer.passhostheader=true"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      # Optional: Basic Authentication for the Traefik dashboard
       - "traefik.http.routers.dashboard.middlewares=authtraefik"
       - "traefik.http.middlewares.authtraefik.basicauth.users=${TRAEFIK_BASIC_AUTH}"
+      # HTTP -> HTTPS redirect for all hosts
       - "traefik.http.routers.http-catchall.rule=HostRegexp(`{host:.+}`)"
       - "traefik.http.routers.http-catchall.entrypoints=web"
       - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
