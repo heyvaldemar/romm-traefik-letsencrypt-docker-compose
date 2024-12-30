@@ -6,8 +6,6 @@ The badge displayed on my repository indicates the status of the deployment veri
 
 **Passing**: This means the most recent commit has successfully passed all deployment checks, confirming that the Docker Compose setup functions correctly as designed.
 
-📙 The complete installation guide is available on my [website](https://www.heyvaldemar.com/install-romm-using-docker-compose/).
-
 ❗ Change variables in the `.env` to meet your requirements.
 
 ❗ The values for `ROMM_AUTH_SECRET_KEY` can be generated using the command:
