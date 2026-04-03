@@ -51,8 +51,7 @@ services:
     image: ${ROMM_IMAGE_TAG}
     volumes:
       - romm-data:/romm/resources
-      - redis-data:/redis-data
-      - ./library:/romm/library
+      - /mnt/c/library:/romm/library
       - ./assets:/romm/assets
       - ./config:/romm/config
     environment:
