@@ -40,7 +40,7 @@ Deploy RomM using Docker Compose:
 
 `docker compose -f romm-traefik-letsencrypt-docker-compose.yml -p romm up -d`
 
-## Docker Volumes Configuration for RomM
+## Docker volumes configuration for RomM
 
 This section details the Docker volume bindings used by RomM to manage and store various data components:
 
@@ -56,7 +56,7 @@ This section details the Docker volume bindings used by RomM to manage and store
 
 Each volume is mapped to a specific directory inside the container to ensure proper data management and isolation, aligning with RomM’s operational requirements and data handling strategies.
 
-## Directory Structure
+## Directory structure
 
 Referencing the installation guide, RomM necessitates a specific directory structure to function correctly. Below are the two endorsed directory configurations:
 
@@ -126,9 +126,9 @@ Referencing the installation guide, RomM necessitates a specific directory struc
  </tr>
 </table>
 
-## Supported Platforms
+## Supported platforms
 
-Adhering to the RomM directory structure ensures compatibility across all platforms listed on the [Supported Platforms](https://github.com/rommapp/romm/wiki/Supported-Platforms) page. **Directory names are case-sensitive and must match exactly with those listed.** RomM scans directories to determine the platform, fetching game data, metadata, and artwork accordingly.
+Adhering to the RomM directory structure ensures compatibility across all platforms listed on the [Supported Platforms](https://github.com/rommapp/romm/wiki/Supported-Platforms) page. Directory names are case-sensitive and must match exactly with those listed. RomM scans directories to determine the platform, fetching game data, metadata, and artwork accordingly.
 
 ## Backups
 
@@ -143,7 +143,7 @@ Customizable backup path, filename pattern, and schedule through variables like 
 
 By utilizing this container, consistent and automated backups of the essential components of your instance are ensured. Moreover, efficient management of backup storage and tailored backup routines can be achieved through easy and flexible configuration using environment variables.
 
-## romm-restore-database.sh Description
+## romm-restore-database.sh description
 
 This script facilitates the restoration of a database backup:
 
@@ -165,7 +165,7 @@ To make the `romm-restore-database.shh` script executable, run the following com
 
 Usage of this script ensures a controlled and guided process to restore the database from an existing backup.
 
-## romm-restore-application-data.sh Description
+## romm-restore-application-data.sh description
 
 This script is designed to restore the application data:
 
