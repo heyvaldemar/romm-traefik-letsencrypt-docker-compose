@@ -276,3 +276,24 @@ Please review all relevant licensing terms and only proceed if you have the lega
 </div>
 
 ![footer](https://user-images.githubusercontent.com/10498744/210157572-1fca0242-8af2-46a6-bfa3-666ffd40ebde.svg)
+
+## Security notes
+
+- **`.env` is tracked in this repository, and it carries live credentials.**
+  The credentials are `TRAEFIK_BASIC_AUTH`, `ROMM_DB_PASSWORD`, `ROMM_DB_ADMIN_PASSWORD`, `ROMM_AUTH_SECRET_KEY`, `ROMM_IGDB_CLIENT_ID`, `ROMM_IGDB_CLIENT_SECRET`, `ROMM_MOBYGAMES_API_KEY`, `ROMM_STEAMGRIDDB_API_KEY`. `.env.example` now lists every variable, and
+  `.gitignore` excludes `.env` — but adding it to `.gitignore` does not untrack
+  a file that is already tracked, and untracking it deletes it from any host
+  that pulls. The order matters:
+
+  ```bash
+  # 1. on the host that runs this stack, keep a copy
+  cp .env .env.keep
+  # 2. in a clone, stop tracking it and push
+  git rm --cached .env && git commit -m "chore: untrack .env" && git push
+  # 3. on the host, pull (which removes .env) and put it back
+  git pull && cp .env.keep .env && rm .env.keep
+  ```
+
+- **Rotate them afterwards.** The values are in the git history and cannot be
+  taken out of it, so untracking the file protects the next commit, not the
+  ones already made.
