@@ -1,3 +1,15 @@
+# Image pins live HERE, as interpolation defaults, so `git pull` (or
+# re-downloading this file) delivers the exact version combination this
+# repository has tested — no .env editing required. Setting the matching
+# variable in .env overrides the default for anyone who wants to pin
+# differently; .env itself carries only secrets and deliberate overrides.
+# CI (Trivy scans, check-pin-freshness, the ephemeral test .env) reads
+# the pins from these lines — this block is the single source of truth.
+x-images:
+  traefik: &traefik-image ${TRAEFIK_IMAGE_TAG:-traefik:3.7@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0}
+  mariadb: &mariadb-image ${ROMM_MARIADB_IMAGE_TAG:-mariadb:11.4@sha256:70cc072b29b4a89ae07abb2d4da2c64678a7f2dfe092751bb51c87d67dc1338b}
+  romm: &romm-image ${ROMM_IMAGE_TAG:-rommapp/romm:5.3.1@sha256:0d66b4ea152a237c7f24b95e87459f46d3c596a7c0b35a82f26bc971487278b3}
+
 networks:
   romm-network:
     external: true
@@ -6,8 +18,9 @@ networks:
 
 volumes:
   mariadb-data:
-  romm-data:
-  redis-data:
+  romm-assets:
+  romm-resources:
+  romm-redis-data:
   romm-mariadb-backup:
   romm-data-backups:
   romm-database-backups:
@@ -15,14 +28,41 @@ volumes:
 
 services:
   mariadb:
-    image: ${ROMM_MARIADB_IMAGE_TAG}
+    image: *mariadb-image
+    # Hardening: no privilege escalation via setuid binaries
+    security_opt:
+      - no-new-privileges:true
+    # Drop every Linux capability; add back only what this image's entrypoint
+    # needs (chown its data directory and drop to its service user).
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    # Docker's default is ten seconds, then SIGKILL. MariaDB has InnoDB to
+    # flush on the way out; killed halfway, the next start does crash
+    # recovery. Sixty seconds, overridable in .env.
+    stop_grace_period: ${ROMM_MARIADB_STOP_GRACE_PERIOD:-60s}
+    # Resource limits as .env-overridable defaults (e.g. ROMM_MARIADB_MEMORY_LIMIT=2g);
+    # the override survives every git pull.
+    deploy:
+      resources:
+        limits:
+          memory: ${ROMM_MARIADB_MEMORY_LIMIT:-1g}
+          cpus: "${ROMM_MARIADB_CPU_LIMIT:-1.0}"
+        reservations:
+          memory: ${ROMM_MARIADB_MEMORY_RESERVATION:-128m}
+          cpus: "${ROMM_MARIADB_CPU_RESERVATION:-0.25}"
     volumes:
       - mariadb-data:/var/lib/mysql
     environment:
-      MARIADB_DATABASE: ${ROMM_DB_NAME}
-      MARIADB_USER: ${ROMM_DB_USER}
-      MARIADB_PASSWORD: ${ROMM_DB_PASSWORD}
-      MARIADB_ROOT_PASSWORD: ${ROMM_DB_ADMIN_PASSWORD}
+      MARIADB_DATABASE: romm
+      MARIADB_USER: ${ROMM_DB_USER:-rommdbuser}
+      MARIADB_PASSWORD: ${ROMM_DB_PASSWORD:?set in .env - see .env.example for generation command}
+      MARIADB_ROOT_PASSWORD: ${ROMM_DB_ADMIN_PASSWORD:?set in .env - see .env.example for generation command}
     networks:
       - romm-network
     healthcheck:
@@ -33,59 +73,69 @@ services:
       start_period: 60s
     restart: unless-stopped
 
-  redis:
-    image: ${ROMM_REDIS_IMAGE_TAG}
-    volumes:
-      - redis-data:/data
-    networks:
-      - romm-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 60s
-    restart: unless-stopped
-
   romm:
-    image: ${ROMM_IMAGE_TAG}
+    image: *romm-image
+    # Hardening: no privilege escalation via setuid binaries
+    security_opt:
+      - no-new-privileges:true
+    # Resource limits as .env-overridable defaults. A library scan is the
+    # heaviest thing RomM does; raise ROMM_MEMORY_LIMIT for a large library.
+    deploy:
+      resources:
+        limits:
+          memory: ${ROMM_MEMORY_LIMIT:-2g}
+          cpus: "${ROMM_CPU_LIMIT:-2.0}"
+        reservations:
+          memory: ${ROMM_MEMORY_RESERVATION:-256m}
+          cpus: "${ROMM_CPU_RESERVATION:-0.25}"
     volumes:
-      - romm-data:/romm/resources
-      - /mnt/c/library:/romm/library
-      - ./assets:/romm/assets
+      # Covers, screenshots and other metadata RomM fetches: re-fetchable.
+      - romm-resources:/romm/resources
+      # RomM 5 runs its own Redis inside this container; this keeps its cache.
+      - romm-redis-data:/redis-data
+      # Saves, states and uploads: yours, and what the backups service archives.
+      - romm-assets:/romm/assets
+      # Your game library. ./library by default, which .gitignore keeps out of
+      # git; point ROMM_LIBRARY_PATH at wherever your collection lives.
+      - ${ROMM_LIBRARY_PATH:-./library}:/romm/library
+      # Optional config.yml (copy config/config.example.yml). RomM starts
+      # without one.
       - ./config:/romm/config
     environment:
       DB_HOST: mariadb
-      DB_NAME: ${ROMM_DB_NAME}
-      DB_USER: ${ROMM_DB_USER}
-      DB_PASSWD: ${ROMM_DB_PASSWORD}
-      ROMM_AUTH_SECRET_KEY: ${ROMM_AUTH_SECRET_KEY}
-      IGDB_CLIENT_ID: ${ROMM_IGDB_CLIENT_ID}
-      IGDB_CLIENT_SECRET: ${ROMM_IGDB_CLIENT_SECRET}
-      MOBYGAMES_API_KEY: ${ROMM_MOBYGAMES_API_KEY}
-      STEAMGRIDDB_API_KEY: ${ROMM_STEAMGRIDDB_API_KEY}
-      SCAN_TIMEOUT: ${ROMM_SCAN_TIMEOUT}
-      ENABLE_SCHEDULED_RESCAN: 'true'
-      SCHEDULED_RESCAN_CRON: ${ROMM_SCHEDULED_RESCAN_CRON}
-      ENABLE_SCHEDULED_UPDATE_SWITCH_TITLEDB: 'true'
-      SCHEDULED_UPDATE_SWITCH_TITLEDB_CRON: ${ROMM_SCHEDULED_UPDATE_SWITCH_TITLEDB_CRON}
-      ENABLE_SCHEDULED_UPDATE_MAME_XML: 'true'
-      SCHEDULED_UPDATE_MAME_XML_CRON: ${ROMM_SCHEDULED_UPDATE_MAME_XML_CRON}
-      TZ: ${ROMM_SERVER_TIMEZONE}
+      DB_NAME: romm
+      DB_USER: ${ROMM_DB_USER:-rommdbuser}
+      DB_PASSWD: ${ROMM_DB_PASSWORD:?set in .env - see .env.example for generation command}
+      ROMM_AUTH_SECRET_KEY: ${ROMM_AUTH_SECRET_KEY:?set in .env - see .env.example for generation command}
+      # Metadata providers. Every one is optional: RomM starts and scans
+      # without any, and gets better with each one configured.
+      SCREENSCRAPER_USER: ${ROMM_SCREENSCRAPER_USER:-}
+      SCREENSCRAPER_PASSWORD: ${ROMM_SCREENSCRAPER_PASSWORD:-}
+      RETROACHIEVEMENTS_API_KEY: ${ROMM_RETROACHIEVEMENTS_API_KEY:-}
+      STEAMGRIDDB_API_KEY: ${ROMM_STEAMGRIDDB_API_KEY:-}
+      IGDB_CLIENT_ID: ${ROMM_IGDB_CLIENT_ID:-}
+      IGDB_CLIENT_SECRET: ${ROMM_IGDB_CLIENT_SECRET:-}
+      MOBYGAMES_API_KEY: ${ROMM_MOBYGAMES_API_KEY:-}
+      HASHEOUS_API_ENABLED: ${ROMM_HASHEOUS_API_ENABLED:-true}
+      SCAN_WORKERS: ${ROMM_SCAN_WORKERS:-4}
+      WEB_SERVER_CONCURRENCY: ${ROMM_WEB_SERVER_CONCURRENCY:-4}
+      TZ: ${ROMM_TIMEZONE:-UTC}
     networks:
       - romm-network
       - traefik-network
+    # RomM's own heartbeat, which also answers with the running version. curl
+    # is in the image.
     healthcheck:
-      test: timeout 10s bash -c ':> /dev/tcp/127.0.0.1/8080' || exit 1
-      interval: 10s
-      timeout: 5s
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/api/heartbeat"]
+      interval: 30s
+      timeout: 10s
       retries: 3
-      start_period: 90s
+      start_period: 120s
     labels:
       # Enable Traefik for this container
       - "traefik.enable=true"
       # Match incoming requests on a specific hostname
-      - "traefik.http.routers.romm.rule=Host(`${ROMM_HOSTNAME}`)"
+      - "traefik.http.routers.romm.rule=Host(`${ROMM_HOSTNAME:?set in .env - see .env.example}`)"
       # Assign the router to a named Traefik service
       - "traefik.http.routers.romm.service=romm"
       # Use the 'websecure' (HTTPS) entry point
@@ -112,10 +162,27 @@ services:
         condition: service_healthy
 
   traefik:
-    image: ${TRAEFIK_IMAGE_TAG}
+    image: *traefik-image
+    # Hardening: no privilege escalation via setuid binaries
+    security_opt:
+      - no-new-privileges:true
+    # Drop every Linux capability; add back only the one a proxy needs to bind
+    # :80 and :443 as a non-root user.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    deploy:
+      resources:
+        limits:
+          memory: ${TRAEFIK_MEMORY_LIMIT:-256m}
+          cpus: "${TRAEFIK_CPU_LIMIT:-0.5}"
+        reservations:
+          memory: ${TRAEFIK_MEMORY_RESERVATION:-64m}
+          cpus: "${TRAEFIK_CPU_RESERVATION:-0.1}"
     command:
       # Set the log level (DEBUG, INFO, WARN, ERROR)
-      - "--log.level=${TRAEFIK_LOG_LEVEL}"
+      - "--log.level=${TRAEFIK_LOG_LEVEL:-WARN}"
       # Enable the built-in API and web-based dashboard
       - "--api.dashboard=true"
       # Enable the /ping endpoint so we can health-check Traefik
@@ -140,7 +207,7 @@ services:
       # Use ACME (Let's Encrypt) to generate/renew certificates via TLS challenge
       - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
       # The email address used by Let's Encrypt for renewal notices
-      - "--certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL:?set in .env - see .env.example}"
       # The file where ACME certificates are stored inside the container
       - "--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme/acme.json"
       # Enable Prometheus metrics
@@ -169,14 +236,14 @@ services:
       # Enable Traefik for this container
       - "traefik.enable=true"
       # A router to expose the Traefik dashboard
-      - "traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_HOSTNAME}`)"
+      - "traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_HOSTNAME:?set in .env - see .env.example}`)"
       - "traefik.http.routers.dashboard.entrypoints=websecure"
       - "traefik.http.routers.dashboard.tls=true"
       - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
       - "traefik.http.routers.dashboard.service=api@internal"
       # Basic Authentication for the Traefik dashboard
       - "traefik.http.routers.dashboard.middlewares=authtraefik"
-      - "traefik.http.middlewares.authtraefik.basicauth.users=${TRAEFIK_BASIC_AUTH}"
+      - "traefik.http.middlewares.authtraefik.basicauth.users=${TRAEFIK_BASIC_AUTH:?set in .env - see .env.example for htpasswd generation}"
       # Specify the internal server port to the dashboard service
       - "traefik.http.services.dashboard.loadbalancer.server.port=8080"
       # Pass the original Host header to the backend
@@ -184,33 +251,89 @@ services:
     restart: unless-stopped
 
   backups:
-    image: ${ROMM_MARIADB_IMAGE_TAG}
+    image: *mariadb-image
+    # Hardening: no privilege escalation via setuid binaries
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    deploy:
+      resources:
+        limits:
+          memory: ${ROMM_BACKUPS_MEMORY_LIMIT:-256m}
+          cpus: "${ROMM_BACKUPS_CPU_LIMIT:-0.5}"
+        reservations:
+          memory: ${ROMM_BACKUPS_MEMORY_RESERVATION:-32m}
+          cpus: "${ROMM_BACKUPS_CPU_RESERVATION:-0.1}"
+    # The loop reports every outcome and never lets a failure look like a
+    # success. Three things it gets right that the previous version did not:
+    #   - `bash -c` with `set -o pipefail`, so a mariadb-dump error fails the
+    #     pipeline. Under plain `sh` the exit status is gzip's, and gzip is
+    #     perfectly happy compressing an error message into a valid archive.
+    #   - each outcome is logged with a timestamp and a byte count, so a
+    #     backup that stopped working is visible in `docker logs`.
+    #   - every file is written to <name>.partial and renamed once the write
+    #     succeeded, so the real name never exists unless the file is whole.
     command: >-
-      sh -c 'sleep $BACKUP_INIT_SLEEP &&
+      bash -c 'set -o pipefail;
+      sleep "$$BACKUP_INIT_SLEEP";
       while true; do
-        mariadb-dump -h mariadb -u $ROMM_DB_USER -p"$ROMM_DB_PASSWORD" $ROMM_DB_NAME | gzip > "$MARIADB_BACKUPS_PATH/$MARIADB_BACKUP_NAME-$(date '+%Y-%m-%d_%H-%M').gz" &&
-        tar -zcpf $DATA_BACKUPS_PATH/$DATA_BACKUP_NAME-$(date "+%Y-%m-%d_%H-%M").tar.gz $DATA_PATH &&
-        find $MARIADB_BACKUPS_PATH -type f -mtime +$MARIADB_BACKUP_PRUNE_DAYS | xargs rm -f &&
-        find $DATA_BACKUPS_PATH -type f -mtime +$DATA_BACKUP_PRUNE_DAYS | xargs rm -f;
-        sleep $BACKUP_INTERVAL; done'
+        STAMP="$$(date +%Y-%m-%d_%H-%M)";
+        DB_FILE="$$MARIADB_BACKUPS_PATH/$$MARIADB_BACKUP_NAME-$$STAMP.gz";
+        echo "[$$(date -Iseconds)] Starting database backup to $$DB_FILE";
+        if mariadb-dump -h mariadb -u $$ROMM_DB_USER -p"$$ROMM_DB_PASSWORD" romm | gzip > "$$DB_FILE.partial"; then
+          mv "$$DB_FILE.partial" "$$DB_FILE";
+          echo "[$$(date -Iseconds)] Database backup OK: $$DB_FILE ($$(stat -c %s "$$DB_FILE") bytes)";
+        else
+          echo "[$$(date -Iseconds)] Database backup FAILED - partial file kept as $$DB_FILE.failed for diagnosis" >&2;
+          mv "$$DB_FILE.partial" "$$DB_FILE.failed" 2>/dev/null || true;
+        fi;
+        DATA_FILE="$$DATA_BACKUPS_PATH/$$DATA_BACKUP_NAME-$$STAMP.tar.gz";
+        echo "[$$(date -Iseconds)] Starting data backup to $$DATA_FILE";
+        # GNU tar exits 1 when a live application changed a file mid-read;
+        # the archive is complete - only exit 2 is a real failure. But an exit
+        # code has never been a statement about whether the file it produced
+        # opens, so the archive is read back before it is renamed into place.
+        # One tar -tzf a day is not a cost worth arguing about, and it is the
+        # difference between a backup and a file named like one. No GNU-only
+        # flags: alpine images ship BusyBox tar.
+        tar -zcpf "$$DATA_FILE.partial" -C / "$${DATA_PATH#/}"; RC=$$?;
+        if { [ "$$RC" -eq 0 ] || [ "$$RC" -eq 1 ]; } && tar -tzf "$$DATA_FILE.partial" > /dev/null 2>&1; then
+          mv "$$DATA_FILE.partial" "$$DATA_FILE";
+          echo "[$$(date -Iseconds)] Data backup OK: $$DATA_FILE ($$(stat -c %s "$$DATA_FILE") bytes)$$([ "$$RC" -eq 1 ] && echo " - some files changed while being read")";
+        else
+          echo "[$$(date -Iseconds)] Data backup FAILED - partial file kept as $$DATA_FILE.failed for diagnosis" >&2;
+          mv "$$DATA_FILE.partial" "$$DATA_FILE.failed" 2>/dev/null || true;
+        fi;
+        if [ "$${MARIADB_BACKUP_PRUNE_DAYS:-0}" -ge 1 ]; then
+          find "$$MARIADB_BACKUPS_PATH" -type f -name "$$MARIADB_BACKUP_NAME-*" -mtime "+$$MARIADB_BACKUP_PRUNE_DAYS" -delete;
+        fi;
+        if [ "$${DATA_BACKUP_PRUNE_DAYS:-0}" -ge 1 ]; then
+          find "$$DATA_BACKUPS_PATH" -type f -name "$$DATA_BACKUP_NAME-*" -mtime "+$$DATA_BACKUP_PRUNE_DAYS" -delete;
+        fi;
+        sleep "$$BACKUP_INTERVAL";
+      done'
     volumes:
       - romm-mariadb-backup:/var/lib/mysql
-      - romm-data:${DATA_PATH}
-      - romm-data-backups:${DATA_BACKUPS_PATH}
-      - romm-database-backups:${MARIADB_BACKUPS_PATH}
+      - romm-assets:${DATA_PATH:-/romm/assets}
+      - romm-data-backups:${DATA_BACKUPS_PATH:-/srv/romm-application-data/backups}
+      - romm-database-backups:${MARIADB_BACKUPS_PATH:-/srv/romm-mariadb/backups}
     environment:
-      ROMM_DB_NAME: ${ROMM_DB_NAME}
-      ROMM_DB_USER: ${ROMM_DB_USER}
+      ROMM_DB_USER: ${ROMM_DB_USER:-rommdbuser}
       ROMM_DB_PASSWORD: ${ROMM_DB_PASSWORD}
-      BACKUP_INIT_SLEEP: ${BACKUP_INIT_SLEEP}
-      BACKUP_INTERVAL: ${BACKUP_INTERVAL}
-      MARIADB_BACKUP_PRUNE_DAYS: ${MARIADB_BACKUP_PRUNE_DAYS}
-      DATA_BACKUP_PRUNE_DAYS: ${DATA_BACKUP_PRUNE_DAYS}
-      MARIADB_BACKUPS_PATH: ${MARIADB_BACKUPS_PATH}
-      DATA_BACKUPS_PATH: ${DATA_BACKUPS_PATH}
-      DATA_PATH: ${DATA_PATH}
-      MARIADB_BACKUP_NAME: ${MARIADB_BACKUP_NAME}
-      DATA_BACKUP_NAME: ${DATA_BACKUP_NAME}
+      BACKUP_INIT_SLEEP: ${BACKUP_INIT_SLEEP:-30m}
+      BACKUP_INTERVAL: ${BACKUP_INTERVAL:-24h}
+      MARIADB_BACKUP_PRUNE_DAYS: ${MARIADB_BACKUP_PRUNE_DAYS:-7}
+      DATA_BACKUP_PRUNE_DAYS: ${DATA_BACKUP_PRUNE_DAYS:-7}
+      MARIADB_BACKUPS_PATH: ${MARIADB_BACKUPS_PATH:-/srv/romm-mariadb/backups}
+      DATA_BACKUPS_PATH: ${DATA_BACKUPS_PATH:-/srv/romm-application-data/backups}
+      DATA_PATH: ${DATA_PATH:-/romm/assets}
+      MARIADB_BACKUP_NAME: ${MARIADB_BACKUP_NAME:-romm-mariadb-backup}
+      DATA_BACKUP_NAME: ${DATA_BACKUP_NAME:-romm-application-data-backup}
     networks:
       - romm-network
     restart: unless-stopped

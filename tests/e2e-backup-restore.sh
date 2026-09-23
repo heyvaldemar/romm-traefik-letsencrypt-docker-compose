@@ -1,0 +1,323 @@
+#!/bin/bash
+# End-to-end tests for the romm-traefik-letsencrypt-docker-compose backup + restore flow.
+#
+# Requires: docker, docker compose. Assumes the stack is already up with
+# short backup intervals in .env (CI uses INIT_SLEEP=15s, INTERVAL=60s).
+#
+# Run from the repository root:
+#   ./tests/e2e-backup-restore.sh
+#
+# CI runs the same script on every push inside the deploy-and-test job.
+#
+# Tests and helpers are dispatched indirectly via run_test "$name"; shellcheck
+# cannot trace that and flags every function as unused (SC2329).
+# shellcheck disable=SC2329
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-romm}"
+DOCKER_COMPOSE_FILE="${DOCKER_COMPOSE_FILE:-romm-traefik-letsencrypt-docker-compose.yml}"
+
+if [[ -f .env ]]; then
+  set -o allexport
+  # shellcheck disable=SC1091
+  source .env
+  set +o allexport
+else
+  echo "error: .env not found at $REPO_ROOT/.env" >&2
+  exit 1
+fi
+
+# Variables the compose file defaults are defaulted the same way here;
+# secrets must come from .env.
+: "${MARIADB_BACKUPS_PATH:=/srv/romm-mariadb/backups}"
+: "${MARIADB_BACKUP_NAME:=romm-mariadb-backup}"
+: "${BACKUP_INTERVAL:=24h}"
+: "${ROMM_DB_USER:=rommdbuser}"
+: "${ROMM_DB_PASSWORD:?set in .env}"
+: "${DATA_BACKUPS_PATH:=/srv/romm-application-data/backups}"
+: "${DATA_BACKUP_NAME:=romm-application-data-backup}"
+
+BACKUPS_PATH="${MARIADB_BACKUPS_PATH%/}"
+BACKUP_PREFIX="${MARIADB_BACKUP_NAME}"
+BACKUP_EXT=".gz"
+INTERVAL="${BACKUP_INTERVAL}"
+DB_USER="${ROMM_DB_USER}"
+DB_PASS="${ROMM_DB_PASSWORD}"
+DB_NAME="romm"
+DB_HOST="mariadb"
+
+# Resolve containers through compose, not by name: a container_name
+# override in the compose file would defeat a docker ps name filter.
+BACKUPS_CONTAINER="$(docker compose -f "$DOCKER_COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" ps -aq backups | head -n 1)"
+DB_CONTAINER="$(docker compose -f "$DOCKER_COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" ps -aq mariadb | head -n 1)"
+[[ -n "$BACKUPS_CONTAINER" ]] || { echo "error: backups container not found" >&2; exit 1; }
+[[ -n "$DB_CONTAINER" ]] || { echo "error: database container not found" >&2; exit 1; }
+
+# seconds to wait for one full backup cycle: INTERVAL plus dump or connection-timeout time
+interval_seconds() {
+  local v="$INTERVAL"
+  case "$v" in
+    *h) echo $(( ${v%h} * 3600 )) ;;
+    *m) echo $(( ${v%m} * 60 )) ;;
+    *s) echo "${v%s}" ;;
+    *) echo "$v" ;;
+  esac
+}
+CYCLE_WAIT=$(( $(interval_seconds) + 60 ))
+
+# --- Test runner ---
+
+PASSED=0
+FAILED=0
+FAILURES=()
+
+run_test() {
+  local name="$1"
+  echo
+  echo "=== $name ==="
+  if "$name"; then
+    echo "  PASS: $name"
+    PASSED=$((PASSED + 1))
+  else
+    echo "  FAIL: $name" >&2
+    FAILED=$((FAILED + 1))
+    FAILURES+=("$name")
+  fi
+}
+
+fail() {
+  echo "  ASSERT: $*" >&2
+  return 1
+}
+
+# Note: never `grep -q` on a docker logs pipe here - with pipefail, grep
+# exiting early sends docker logs a SIGPIPE and the whole pipeline fails.
+
+# --- Container helpers ---
+
+backups_sh() {
+  docker exec "$BACKUPS_CONTAINER" sh -c "$1"
+}
+
+db_query() {
+  docker exec "$BACKUPS_CONTAINER" mariadb -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" -N -s -e "$1" "$DB_NAME" 2>/dev/null
+}
+db_ready() {
+  docker exec "$BACKUPS_CONTAINER" mariadb-admin -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" ping > /dev/null 2>&1
+}
+marker_create() { db_query "CREATE TABLE IF NOT EXISTS e2e_marker (id int PRIMARY KEY);" > /dev/null; }
+marker_insert() { db_query "CREATE TABLE IF NOT EXISTS restore_test (id int); INSERT INTO restore_test VALUES (1);" > /dev/null; }
+marker_count() { db_query "SELECT count(*) FROM restore_test;" | tr -d '[:space:]'; }
+marker_gone() {
+  [[ "$(db_query "SELECT count(*) FROM information_schema.tables WHERE table_schema='$DB_NAME' AND table_name='restore_test';" | tr -d '[:space:]')" == "0" ]]
+}
+DUMP_HEADER="MySQL dump|MariaDB dump"
+DUMP_CONTENT="CREATE TABLE"
+
+list_backups() {
+  backups_sh "ls -1 ${BACKUPS_PATH}/${BACKUP_PREFIX}-*${BACKUP_EXT} 2>/dev/null" | grep -v '\.failed$' | sort || true
+}
+
+# First backup taken after the marker existed; waits up to one cycle for it.
+post_marker_backup() {
+  local f elapsed=0
+  while :; do
+    f=$(backups_sh "find ${BACKUPS_PATH} -name '${BACKUP_PREFIX}-*${BACKUP_EXT}' -newer ${BACKUPS_PATH}/.e2e-marker-stamp 2>/dev/null | sort | head -1")
+    # a file that exists is not yet a backup: the loop may still be writing it,
+    # so wait for the "backup OK" log line that names it
+    if [[ -n "$f" ]] && docker logs "$BACKUPS_CONTAINER" 2>&1 | grep -qF "backup OK: $f"; then echo "$f"; return 0; fi
+    [[ $elapsed -lt $CYCLE_WAIT ]] || return 1
+    sleep 5; elapsed=$((elapsed + 5))
+  done
+}
+
+wait_for_first_backup() {
+  local timeout="${1:-180}" elapsed=0
+  while [[ $elapsed -lt $timeout ]]; do
+    [[ -n "$(list_backups)" ]] && return 0
+    sleep 3; elapsed=$((elapsed + 3))
+  done
+  return 1
+}
+
+wait_for_db_ready() {
+  local timeout="${1:-90}" elapsed=0
+  while [[ $elapsed -lt $timeout ]]; do
+    db_ready && return 0
+    sleep 3; elapsed=$((elapsed + 3))
+  done
+  return 1
+}
+
+# --- Test cases ---
+
+test_env_required() {
+  # The compose file guards required variables with ${VAR:?...}; without
+  # .env and with an empty environment `docker compose config` must refuse.
+  mv .env .env.bak
+  local out
+  out=$(env -i PATH="$PATH" HOME="$HOME" docker compose -f "$DOCKER_COMPOSE_FILE" config 2>&1 || true)
+  mv .env.bak .env
+  echo "$out" | grep -qiE "set in \.env|required|is not set" && return 0
+  fail "expected a required-variable error from docker compose config"
+}
+
+test_backup_created() {
+  echo "  waiting up to 180s for the first backup..."
+  wait_for_first_backup 180 || { fail "no backup appeared within 180s"; return 1; }
+  local first size
+  first=$(list_backups | head -1)
+  size=$(backups_sh "stat -c %s $first" | tr -d '[:space:]')
+  [[ -n "$size" && "$size" -gt 0 ]] || { fail "backup $first has size '$size'"; return 1; }
+  echo "  first backup: $first ($size bytes)"
+}
+
+test_backup_gunzip_ok() {
+  local newest
+  newest=$(list_backups | tail -1)
+  backups_sh "gunzip -t $newest" || { fail "gunzip -t failed on $newest"; return 1; }
+}
+
+test_backup_content_valid() {
+  [[ -n "$DUMP_HEADER" ]] || { echo "  (binary archive format, header check not applicable)"; return 0; }
+  # Judge a backup taken after the marker existed: some applications create
+  # their schema only after the setup wizard, so an early dump is legitimately
+  # empty apart from the marker table.
+  local newest
+  newest=$(post_marker_backup) || { fail "no backup taken after the marker within ${CYCLE_WAIT}s"; return 1; }
+  backups_sh "gunzip -c $newest | head -5" | grep -qE "$DUMP_HEADER" || { fail "expected dump header ($DUMP_HEADER) at the top of $newest"; return 1; }
+  # the preamble (types, functions, SET lines) can run long - search the whole dump
+  backups_sh "gunzip -c $newest | grep -m1 -qE '$DUMP_CONTENT'" || { fail "expected $DUMP_CONTENT somewhere in $newest"; return 1; }
+}
+
+test_data_backup_valid() {
+  # Log-driven: the archive named in a 'Data backup OK' line is complete,
+  # so this never races an archive that is still being written.
+  local f elapsed=0
+  # the data archive is written after the dump and can take a while on a
+  # large tree; wait for the loop to report it before judging
+  until docker logs "$BACKUPS_CONTAINER" 2>&1 | grep -E "Data backup (OK|FAILED)" > /dev/null; do
+    [[ $elapsed -lt 180 ]] || { fail "no data backup result within 180s"; return 1; }
+    sleep 3; elapsed=$((elapsed + 3))
+  done
+  f=$(docker logs "$BACKUPS_CONTAINER" 2>&1 | grep "Data backup OK" | tail -1 | sed -E 's/.*Data backup OK: ([^ ]+) .*/\1/')
+  [[ -n "$f" ]] || { fail "no 'Data backup OK' line in the backups log"; return 1; }
+  backups_sh "tar -tzf $f > /dev/null" || { fail "tar -tzf failed on $f"; return 1; }
+  echo "  data archive readable: $f"
+}
+
+test_backup_failure_detected() {
+  # Stop the database so the next dump attempt fails; the loop must log
+  # FAILED and keep the partial file as .failed. The data archive of a
+  # large tree can take longer than the interval, so wait for an actual
+  # failed attempt during the outage instead of a fixed cycle time.
+  local failed_before deadline failed_files
+  failed_before=$(docker logs "$BACKUPS_CONTAINER" 2>&1 | grep -ci "backup FAILED" || true)
+  echo "  stopping the database to force a failed cycle"
+  docker stop "$DB_CONTAINER" > /dev/null
+  deadline=$(( $(date +%s) + CYCLE_WAIT * 2 + 120 ))
+  echo "  waiting up to $(( CYCLE_WAIT * 2 + 120 ))s for a failed dump during the outage..."
+  while [[ $(docker logs "$BACKUPS_CONTAINER" 2>&1 | grep -ci "backup FAILED" || true) -le $failed_before ]]; do
+    if [[ $(date +%s) -ge $deadline ]]; then break; fi
+    sleep 5
+  done
+  failed_files=$(backups_sh "ls ${BACKUPS_PATH}/*.failed 2>/dev/null" || true)
+  echo "  restarting the database"
+  docker start "$DB_CONTAINER" > /dev/null
+  wait_for_db_ready 90 || { fail "database did not become ready within 90s after restart"; return 1; }
+  [[ $(docker logs "$BACKUPS_CONTAINER" 2>&1 | grep -ci "backup FAILED" || true) -gt $failed_before ]] || { fail "no 'backup FAILED' log line during the outage"; return 1; }
+  [[ -n "$failed_files" ]] || { fail "no *.failed file produced during the outage"; return 1; }
+  echo "  observed failed file: $failed_files"
+}
+
+test_restore_roundtrip() {
+  # Proof that restore replaces database state rather than being a no-op:
+  # take the earliest backup, add a marker, restore, assert the marker is gone.
+  # The baseline must postdate the marker collection/table: CI takes its first
+  # backup long before this script runs, and a restore of a pre-marker archive
+  # cannot prove anything about it.
+  local baseline before
+  baseline=$(post_marker_backup) || { fail "no backup taken after the marker within ${CYCLE_WAIT}s"; return 1; }
+  echo "  baseline: $baseline"
+  marker_insert
+  before=$(marker_count)
+  [[ "$before" -ge 1 ]] || { fail "marker insert failed: count=$before"; return 1; }
+  # THE SHIPPED SCRIPT, NOT A COPY OF ITS COMMANDS. This used to call its own
+  # db_restore, so the script a person runs on their worst day was never run
+  # here - and it was pointing at a directory the stack does not use.
+  echo "  restoring the baseline with ./romm-restore-database.sh"
+  COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME" ./romm-restore-database.sh "$(basename "$baseline")" \
+    || { fail "the shipped restore script failed"; return 1; }
+  marker_gone || { fail "marker still present after restore - restore was a no-op"; return 1; }
+  echo "  marker absent after restore - the backup is restorable"
+}
+
+test_data_restore_roundtrip() {
+  # The same proof for application data, through the shipped script: a marker
+  # written after every existing archive must be gone once one is restored.
+  local data first
+  data="$(backups_sh 'printenv DATA_PATH' | tr -d '[:space:]')"
+  first="$(backups_sh "ls -1 ${DATA_BACKUPS_PATH%/}/${DATA_BACKUP_NAME}-*.tar.gz 2>/dev/null" | sort | head -n 1)"
+  [[ -n "$first" ]] || { fail "no application data archive to restore"; return 1; }
+  backups_sh "touch '$data/e2e-restore-marker'" || { fail "could not write the marker into $data"; return 1; }
+  echo "  restoring $(basename "$first") with ./romm-restore-application-data.sh"
+  COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME" ./romm-restore-application-data.sh "$(basename "$first")" \
+    || { fail "the shipped restore script failed"; return 1; }
+  if backups_sh "test -e '$data/e2e-restore-marker'"; then
+    fail "marker still present after the data restore - it did not replace the data"; return 1
+  fi
+  echo "  marker absent after the data restore - the archive is restorable"
+}
+
+test_prune_removes_old() {
+  local fake_old="${BACKUPS_PATH}/${BACKUP_PREFIX}-0000-00-00_00-00${BACKUP_EXT}"
+  echo "  placing a fake file dated 2020 at $fake_old"
+  # touch -t works in GNU and BusyBox alike; -d 'N days ago' is GNU-only
+  backups_sh "echo fake > $fake_old && touch -t 202001010000 $fake_old" || { fail "could not create the fake file"; return 1; }
+  echo "  waiting ${CYCLE_WAIT}s for the next prune cycle..."
+  sleep "$CYCLE_WAIT"
+  if backups_sh "ls $fake_old 2>/dev/null" > /dev/null 2>&1; then fail "fake old file survived the prune cycle"; return 1; fi
+  [[ -n "$(list_backups)" ]] || { fail "prune removed everything, including recent backups"; return 1; }
+}
+
+# --- Main ---
+
+echo "=== Deployment Verification: backup/restore E2E tests ==="
+echo "  project=${COMPOSE_PROJECT_NAME} backups=${BACKUPS_CONTAINER} db=${DB_CONTAINER}"
+echo "  path=${BACKUPS_PATH} prefix=${BACKUP_PREFIX} interval=${INTERVAL}"
+
+wait_for_db_ready 120 || { echo "error: database not ready" >&2; exit 1; }
+# Pin known content into the database before the first backup cycle. Some
+# images answer the readiness ping from a temporary init server before the
+# application database exists, so this retries instead of trusting one ping.
+marker_ok=0
+for _ in $(seq 1 40); do
+  if marker_create 2>/dev/null; then marker_ok=1; break; fi
+  sleep 3
+done
+[[ "$marker_ok" == 1 ]] || { echo "error: could not create the marker in the database within 120s" >&2; exit 1; }
+# stamp the moment the marker exists; the restore test picks the first backup newer than this
+backups_sh "touch ${BACKUPS_PATH}/.e2e-marker-stamp"
+
+run_test test_env_required
+run_test test_backup_created
+run_test test_backup_gunzip_ok
+run_test test_backup_content_valid
+run_test test_data_backup_valid
+run_test test_backup_failure_detected
+run_test test_restore_roundtrip
+run_test test_data_restore_roundtrip
+run_test test_prune_removes_old
+
+echo
+echo "==============================="
+echo "Passed: $PASSED  Failed: $FAILED"
+if [[ ${#FAILURES[@]} -gt 0 ]]; then
+  echo "Failures:"
+  for f in "${FAILURES[@]}"; do echo "  - $f"; done
+fi
+[[ $FAILED -eq 0 ]]

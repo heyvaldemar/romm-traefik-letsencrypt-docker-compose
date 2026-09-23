@@ -1,46 +1,61 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# romm-restore-database.sh [backup-file-name]
+#
+# Replaces the RomM database with one of the dumps the backups service wrote.
+#
+#   ./romm-restore-database.sh               list the dumps and ask
+#   ./romm-restore-database.sh <file-name>   restore that one
+#
+# EVERY PATH AND NAME COMES FROM THE RUNNING BACKUPS CONTAINER, NOT FROM HERE.
+# The previous version kept its own copy of the backup directory, and the copy
+# said /srv/romm-mariadb/backups while the stack wrote to
+# /srv/romm-mariadb/backups: on the day it was needed it would have listed
+# nothing. The backup loop reads its directories and names from its own
+# environment, so this asks that environment, and the two cannot disagree.
+#
+# CI runs this exact file. The end-to-end test used to restore with its own copy
+# of these commands, which is how a restore script could be wrong for weeks
+# while every run was green.
+#
+# Set COMPOSE_PROJECT_NAME if the stack was started with a -p other than romm.
+set -Eeuo pipefail
 
-# # romm-restore-database.sh Description
-# This script facilitates the restoration of a database backup.
-# 1. **Identify Containers**: It first identifies the service and backups containers by name, finding the appropriate container IDs.
-# 2. **List Backups**: Displays all available database backups located at the specified backup path.
-# 3. **Select Backup**: Prompts the user to copy and paste the desired backup name from the list to restore the database.
-# 4. **Stop Service**: Temporarily stops the service to ensure data consistency during restoration.
-# 5. **Restore Database**: Executes a sequence of commands to drop the current database, create a new one, and restore it from the selected compressed backup file.
-# 6. **Start Service**: Restarts the service after the restoration is completed.
-# To make the `romm-restore-database.shh` script executable, run the following command:
-# `chmod +x romm-restore-database.sh`
-# Usage of this script ensures a controlled and guided process to restore the database from an existing backup.
+PROJECT="${COMPOSE_PROJECT_NAME:-romm}"
+APP_SERVICE="romm"
+DB_NAME="romm"
 
-ROMM_CONTAINER=$(docker ps -aqf "name=romm-romm")
-ROMM_BACKUPS_CONTAINER=$(docker ps -aqf "name=romm-backups")
-ROMM_DB_NAME="rommdb"
-ROMM_DB_USER=$(docker exec $ROMM_BACKUPS_CONTAINER printenv ROMM_DB_USER)
-MARIADB_PASSWORD=$(docker exec $ROMM_BACKUPS_CONTAINER printenv ROMM_DB_PASSWORD)
-BACKUP_PATH="/srv/romm-mariadb/backups/"
+cid() {  # the container of one compose service in this project
+  docker ps -aq --filter "label=com.docker.compose.project=$PROJECT" \
+    --filter "label=com.docker.compose.service=$1" | head -n 1
+}
+APP="$(cid "$APP_SERVICE")"; BKP="$(cid backups)"
+[ -n "$BKP" ] || { echo "error: no backups container in compose project '$PROJECT' (set COMPOSE_PROJECT_NAME)" >&2; exit 1; }
+[ -n "$APP" ] || { echo "error: no $APP_SERVICE container in compose project '$PROJECT'" >&2; exit 1; }
+[ "$(docker inspect -f '{{.State.Running}}' "$BKP")" = true ] || { echo "error: the backups container is not running" >&2; exit 1; }
 
-echo "--> All available database backups:"
+env_of() { docker exec "$BKP" printenv "$1"; }
+DIR="$(env_of MARIADB_BACKUPS_PATH)"; NAME="$(env_of MARIADB_BACKUP_NAME)"
+DB_USER="$(env_of ROMM_DB_USER)"; DB_PASS="$(env_of ROMM_DB_PASSWORD)"
 
-for entry in $(docker container exec "$ROMM_BACKUPS_CONTAINER" sh -c "ls $BACKUP_PATH")
-do
-  echo "$entry"
-done
+SELECTED="${1:-}"
+if [ -z "$SELECTED" ]; then
+  echo "Database backups in $DIR:"
+  docker exec "$BKP" sh -c "ls -1 '$DIR' | grep -E '^$NAME-.*\\.gz\$'" || { echo "  none found" >&2; exit 1; }
+  read -r -p "File name to restore: " SELECTED
+fi
+case "$SELECTED" in ""|*/*) echo "error: give a file name from the list, not a path" >&2; exit 1 ;; esac
+docker exec "$BKP" gunzip -t "$DIR/$SELECTED" \
+  || { echo "error: $DIR/$SELECTED is missing or does not open; nothing was changed" >&2; exit 1; }
 
-echo "--> Copy and paste the backup name from the list above to restore database and press [ENTER]"
-echo "--> Example: romm-mariadb-backup-YYYY-MM-DD_hh-mm.gz"
-echo -n "--> "
-
-read SELECTED_DATABASE_BACKUP
-
-echo "--> $SELECTED_DATABASE_BACKUP was selected"
-
-echo "--> Stopping service..."
-docker stop "$ROMM_CONTAINER"
-
-echo "--> Restoring database..."
-docker exec "$ROMM_BACKUPS_CONTAINER" sh -c "mariadb -h mariadb -u $ROMM_DB_USER --password=$MARIADB_PASSWORD -e 'DROP DATABASE $ROMM_DB_NAME; CREATE DATABASE $ROMM_DB_NAME;' \
-&& gunzip -c ${BACKUP_PATH}${SELECTED_DATABASE_BACKUP} | mariadb -h mariadb -u $ROMM_DB_USER --password=$MARIADB_PASSWORD $ROMM_DB_NAME"
-echo "--> Database recovery completed..."
-
-echo "--> Starting service..."
-docker start "$ROMM_CONTAINER"
+echo "Stopping $APP_SERVICE so nothing writes while the database is replaced"
+docker stop "$APP" >/dev/null
+restart() { docker start "$APP" >/dev/null && echo "Started $APP_SERVICE"; }
+trap 'restart' EXIT
+echo "Restoring $SELECTED"
+if ! docker exec -e MYSQL_PWD="$DB_PASS" "$BKP" bash -c "set -euo pipefail
+    mariadb -h mariadb -u '$DB_USER' -e 'DROP DATABASE IF EXISTS \`$DB_NAME\`; CREATE DATABASE \`$DB_NAME\`;'
+    gunzip -c '$DIR/$SELECTED' | mariadb -h mariadb -u '$DB_USER' '$DB_NAME'"; then
+  echo "error: the restore failed part-way. The database may now be empty: restore another backup before using RomM." >&2
+  exit 1
+fi
+echo "Restored $SELECTED into $DB_NAME"

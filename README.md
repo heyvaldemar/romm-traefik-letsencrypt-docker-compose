@@ -1,299 +1,127 @@
-# RomM with Let's Encrypt Using Docker Compose
+# RomM + Traefik + Let's Encrypt on Docker Compose
 
-[![Deployment Verification](https://github.com/heyvaldemar/romm-traefik-letsencrypt-docker-compose/actions/workflows/00-deployment-verification.yml/badge.svg)](https://github.com/heyvaldemar/romm-traefik-letsencrypt-docker-compose/actions)
+[![Deployment Verification](https://github.com/heyvaldemar/romm-traefik-letsencrypt-docker-compose/actions/workflows/deployment-verification.yml/badge.svg?branch=main)](https://github.com/heyvaldemar/romm-traefik-letsencrypt-docker-compose/actions/workflows/deployment-verification.yml)
 
-The badge displayed on my repository indicates the status of the deployment verification workflow as executed on the latest commit to the main branch.
+This repository deploys [RomM](https://github.com/rommapp/romm) 5, a self-hosted manager for your game library with in-browser play, behind Traefik with automatic Let's Encrypt TLS, a MariaDB database, and a backups service whose restore scripts CI runs on every push.
 
-**Passing**: This means the most recent commit has successfully passed all deployment checks, confirming that the Docker Compose setup functions correctly as designed.
+## Getting started
 
-❗ Change variables in the `.env` to meet your requirements.
-
-❗ The values for `ROMM_AUTH_SECRET_KEY` can be generated using the command:
-
-`openssl rand -hex 32`
-
-❗ Generate an API key at [MobyGames](https://www.mobygames.com/info/api/) and assign it to `ROMM_MOBYGAMES_API_KEY`.
-
-❗ Generate an API key at [SteamGridDB](https://www.steamgriddb.com/profile/preferences/api) and assign it to `ROMM_STEAMGRIDDB_API_KEY`.
-
-❗ Edit the environment variables `ROMM_IGDB_CLIENT_ID` and `ROMM_IGDB_CLIENT_SECRET` to the values retrieved from your IGDB account:
-
-1. Sign up for a free Twitch account.
-2. Enable Two-Factor Authentication.
-3. Register your application in the Twitch Developer Portal:
-   - Name your application uniquely.
-   - Add a URL (it doesn’t have to be valid, just unique).
-   - Choose a category and set the Client Type to "Confidential."
-4. Complete the Captcha and click "Create."
-5. Click "Manage" next to your new app to view your client ID (similar to a username).
-6. Click "New Secret" to generate a secret key (similar to a password). Note: This secret is shown only once; make sure to record it.
-
-💡 Note that the `.env` file should be in the same directory as `romm-traefik-letsencrypt-docker-compose.yml`.
-
-Create networks for your services before deploying the configuration using the commands:
-
-`docker network create traefik-network`
-
-`docker network create romm-network`
-
-Deploy RomM using Docker Compose:
-
-`docker compose -f romm-traefik-letsencrypt-docker-compose.yml -p romm up -d`
-
-## Docker volumes configuration for RomM
-
-This section details the Docker volume bindings used by RomM to manage and store various data components:
-
-- `romm-data:/romm/resources`: This volume stores resources fetched from IGDB, such as game covers, screenshots, and other media, essential for enriching the game display and user experience.
+```bash
+# 1. Clone
+git clone https://github.com/heyvaldemar/romm-traefik-letsencrypt-docker-compose
+cd romm-traefik-letsencrypt-docker-compose
 
-- `redis-data:/redis-data`: Used for caching data essential for the performance of background tasks, improving the efficiency and responsiveness of the application.
+# 2. Create the two Docker networks the stack expects
+docker network create traefik-network
+docker network create romm-network
 
-- `./library:/romm/library`: Maps the local `library` directory to the container, serving as the primary storage for your game library where all game files are accessed and managed.
+# 3. Copy the environment template and fill in required values
+cp .env.example .env
+$EDITOR .env
+# ^ Required: TRAEFIK_ACME_EMAIL, TRAEFIK_HOSTNAME, TRAEFIK_BASIC_AUTH,
+#   ROMM_HOSTNAME, ROMM_DB_PASSWORD, ROMM_DB_ADMIN_PASSWORD,
+#   ROMM_AUTH_SECRET_KEY. See .env.example for generation commands.
 
-- `./assets:/romm/assets`: Local storage for uploaded game saves, states, and other related assets, ensuring they are persisted and readily accessible.
+# 4. Deploy
+docker compose -f romm-traefik-letsencrypt-docker-compose.yml -p romm up -d
+```
 
-- `./config:/romm/config`: Contains the `config.yml` configuration file, centralizing the application's settings and configurations in a single, easily accessible location.
+Within a few minutes, `https://${ROMM_HOSTNAME}` opens RomM's setup wizard and `https://${TRAEFIK_HOSTNAME}` serves the basic-auth protected Traefik dashboard, both with fresh Let's Encrypt certificates.
 
-Each volume is mapped to a specific directory inside the container to ensure proper data management and isolation, aligning with RomM’s operational requirements and data handling strategies.
+### What success looks like
 
-## Directory structure
+```bash
+docker compose -f romm-traefik-letsencrypt-docker-compose.yml -p romm ps
+# Expected: mariadb, romm and traefik "(healthy)", backups running
 
-Referencing the installation guide, RomM necessitates a specific directory structure to function correctly. Below are the two endorsed directory configurations:
+curl -fsS "https://${ROMM_HOSTNAME}/api/heartbeat" | jq -r .SYSTEM.VERSION
+# Expected: the version the compose file pins
+```
 
-<table>
- <tr>
-    <th><b>Preferred Structure A</b></th>
-    <th><b>Alternative Structure B</b></th>
- </tr>
- <tr>
-  <td>
-    <code>library/roms/gbc/rom_1.gbc</code>
-  </td>
-  <td>
-    <code>library/gbc/roms/rom_1.gbc</code>
-  </td>
- </tr>
- <tr>
-    <td>
-      <pre>
-        library/
-        ├─ roms/
-        │  ├─ gbc/
-        │  │  ├─ rom_1.gbc
-        │  │  ├─ rom_2.gbc
-        │  ├─ gba/
-        │  │  ├─ rom_1.gba
-        │  │  ├─ rom_2.gba
-        │  ├─ ps/
-        │     ├─ my_multifile_game/
-        │     │   ├─ my_game_cd1.iso
-        │     │   ├─ my_game_cd2.iso
-        │     ├─ rom_1.iso
-        ├─ bios/
-        │  ├─ gba/
-        │  │  ├─ gba_bios.bin
-        │  ├─ ps/
-        │     ├─ scph1001.bin
-        │     ├─ scph5501.bin
-        │     ├─ scph5502.bin
-      </pre>
-    </td>
-    <td>
-      <pre>
-        library/
-        ├─ gbc/
-        │  ├─ roms/
-        │     ├─ rom_1.gbc
-        │     ├─ rom_2.gbc
-        ├─ gba/
-        │  ├─ roms/
-        │     ├─ rom_1.gba
-        │     ├─ rom_2.gba
-        │  ├─ bios/
-        │     ├─ gba_bios.bin
-        ├─ ps/
-        │  ├─ roms/
-        │     ├─ my_multifile_game/
-        │     │  ├─ my_game_cd1.iso
-        │     │  ├─ my_game_cd2.iso
-        │     ├─ rom_1.iso
-        │  ├─ bios/
-        │     ├─ scph1001.bin
-        │     ├─ scph5501.bin
-        │     ├─ scph5502.bin
-      </pre>
-    </td>
- </tr>
-</table>
+### Common first-deploy issues
 
-## Supported platforms
+- **Cert issuance fails.** DNS hasn't propagated to your server's IP yet, or port 80/443 isn't reachable from the internet. Confirm with `dig +short ${ROMM_HOSTNAME}`.
+- **`docker compose up` fails with `set in .env`.** A required variable is empty in `.env`; the error names it.
+- **Network not found.** Step 2 (the `docker network create` commands) was skipped.
+- **The library is empty after a scan.** RomM expects one folder per platform; see the [folder structure](https://docs.romm.app) it reads.
 
-Adhering to the RomM directory structure ensures compatibility across all platforms listed on the [Supported Platforms](https://github.com/rommapp/romm/wiki/Supported-Platforms) page. Directory names are case-sensitive and must match exactly with those listed. RomM scans directories to determine the platform, fetching game data, metadata, and artwork accordingly.
+## Your library
 
-## Backups
+The compose file mounts `./library` next to it as the library by default, and `.gitignore` keeps everything in that directory out of git, so a `git add -A` can never commit your game files. To use a collection that lives elsewhere, set `ROMM_LIBRARY_PATH` in `.env`.
 
-The `backups` container in the configuration is responsible for the following:
+An optional `config.yml` (start from `config/config.example.yml`) goes in `config/`; it is gitignored too, so editing it never blocks `update.sh`.
 
-1. **Database Backup**: Creates compressed backups of the MariaDB database using pg_dump.
-Customizable backup path, filename pattern, and schedule through variables like `MARIADB_BACKUPS_PATH`, `MARIADB_BACKUP_NAME`, and `BACKUP_INTERVAL`.
+### Metadata providers
 
-2. **Application Data Backup**: Compresses and stores backups of the application data on the same schedule. Controlled via variables such as `DATA_BACKUPS_PATH`, `DATA_BACKUP_NAME`, and `BACKUP_INTERVAL`.
+Every provider is optional: RomM starts and scans without any, and gets better with each one configured. ScreenScraper, RetroAchievements, SteamGridDB, IGDB and MobyGames each need an account or key from that service, and Hasheous is on by default. Where to get each: [RomM's metadata provider guide](https://docs.romm.app/latest/Getting-Started/Metadata-Providers/). They are third-party services with their own terms.
 
-3. **Backup Pruning**: Periodically removes backups exceeding a specified age to manage storage. Customizable pruning schedule and age threshold with `MARIADB_BACKUP_PRUNE_DAYS` and `DATA_BACKUP_PRUNE_DAYS`.
+## What this repository does not contain
 
-By utilizing this container, consistent and automated backups of the essential components of your instance are ensured. Moreover, efficient management of backup storage and tailored backup routines can be achieved through easy and flexible configuration using environment variables.
+No ROM, BIOS, firmware or other copyrighted game file is included, linked to, or described how to obtain. RomM manages and plays a library you already own: use dumps of cartridges and discs you have, and check that doing so is lawful where you live. This repository deploys the upstream [rommapp/romm](https://github.com/rommapp/romm) image (AGPL-3.0) unmodified.
 
-## romm-restore-database.sh description
+## Supply chain trust
 
-This script facilitates the restoration of a database backup:
+This repository is a deployment template, not a custom image. It orchestrates three upstream images:
 
-1. **Identify Containers**: It first identifies the service and backups containers by name, finding the appropriate container IDs.
+- [`rommapp/romm`](https://hub.docker.com/r/rommapp/romm): RomM upstream
+- [`mariadb`](https://hub.docker.com/_/mariadb): database, Docker Hub official image
+- [`traefik`](https://hub.docker.com/_/traefik): reverse proxy, Docker Hub official image
 
-2. **List Backups**: Displays all available database backups located at the specified backup path.
+Each is pinned to `tag@sha256:<digest>` as an interpolation default in the compose file's `x-images` block. Compose pulls by digest, so two users deploying on different days get byte-identical image manifests, and `git pull` alone delivers the combination this repository has tested. Setting `ROMM_IMAGE_TAG`, `ROMM_MARIADB_IMAGE_TAG` or `TRAEFIK_IMAGE_TAG` in `.env` overrides a default when you deliberately want a different version.
 
-3. **Select Backup**: Prompts the user to copy and paste the desired backup name from the list to restore the database.
+The daily Pin Freshness workflow re-resolves each pinned tag against its registry and compares the pinned RomM version with the latest upstream release. Any drift fails that run and notifies the maintainer. GitHub Actions are pinned by commit SHA with version comments; Dependabot keeps those fresh.
 
-4. **Stop Service**: Temporarily stops the service to ensure data consistency during restoration.
+## Production checklist
 
-5. **Restore Database**: Executes a sequence of commands to drop the current database, create a new one, and restore it from the selected compressed backup file.
+- [ ] **Generate every secret yourself**: the database passwords, `ROMM_AUTH_SECRET_KEY`, and the `TRAEFIK_BASIC_AUTH` hash.
+- [ ] **Finish the setup wizard straight away.** Until the first account exists, whoever opens the hostname first creates it.
+- [ ] **Verify Let's Encrypt cert issuance.** Watch `docker compose -p romm logs traefik -f` on first start for `Adding certificate for domain(s)`.
+- [ ] **Lock down the Traefik dashboard.** Basic auth is basic. Consider Traefik's `IPAllowList` middleware or not exposing the dashboard publicly at all.
+- [ ] **Back up the library yourself.** The backups service archives RomM's database and your saves and states, not the game files, which are yours and usually far larger.
 
-6. **Start Service**: Restarts the service after the restoration is completed.
+## Unattended updates
 
-To make the `romm-restore-database.shh` script executable, run the following command:
+Releases are the update channel: a tag is cut only after CI has booted the pinned images, upgraded from the previous release on the same volumes, and passed the smoke and restore tests. `update.sh` moves a deployment to the newest tag and nothing else:
 
-`chmod +x romm-restore-database.sh`
+```bash
+./update.sh --dry-run   # show what would be applied
+./update.sh             # update within the current major and redeploy
+```
 
-Usage of this script ensures a controlled and guided process to restore the database from an existing backup.
+The script refuses to cross a MAJOR template version on its own, refuses to touch a checkout with local modifications, and names any variable that became required since your version before anything moves.
 
-## romm-restore-application-data.sh description
+## Resource limits
 
-This script is designed to restore the application data:
+Every service carries memory and CPU limits plus reservations as compose-level defaults: the same values CI boots the stack under. Override any of them in `.env` (the knobs are listed in `.env.example`) and the override survives every `git pull`. A library scan is the heaviest thing RomM does; if it is OOM-killed on a large collection, raise `ROMM_MEMORY_LIMIT`.
 
-1. **Identify Containers**: Similarly to the database restore script, it identifies the service and backups containers by name.
+## Backups and restore
 
-2. **List Application Data Backups**: Displays all available application data backups at the specified backup path.
+The `backups` service dumps the database and archives RomM's saves, states and uploads (`/romm/assets`) on its interval (`BACKUP_INTERVAL`, default 24h), reads each file back before naming it a backup, and prunes by age. Restore with the two scripts next to the compose file:
 
-3. **Select Backup**: Asks the user to copy and paste the desired backup name for application data restoration.
+```bash
+./romm-restore-database.sh            # list the database dumps and ask which
+./romm-restore-database.sh <file>     # restore that dump
+./romm-restore-application-data.sh    # the same for saves, states and uploads
+```
 
-4. **Stop Service**: Stops the service to prevent any conflicts during the restore process.
+Both stop RomM while they work and start it again afterwards, and both take every path and file name from the running backups container, so they cannot disagree with where the stack writes. Set `COMPOSE_PROJECT_NAME` if you started the stack with a `-p` other than `romm`.
 
-5. **Restore Application Data**: Removes the current application data and then extracts the selected backup to the appropriate application data path.
+## Container hardening
 
-6. **Start Service**: Restarts the service after the application data has been successfully restored.
+Every service runs with `security_opt: no-new-privileges:true`. Infrastructure containers (the reverse proxy, the database, the backups service) run with `cap_drop: [ALL]` and add back only what their entrypoints need. The application container keeps the default capability set on purpose: upstream images assume it, and a wrong guess there is a boot loop in production rather than a hardening win. CI boots the stack under exactly these settings on every push.
 
-To make the `romm-restore-application-data.sh` script executable, run the following command:
+## Testing
 
-`chmod +x romm-restore-application-data.sh`
+The [Deployment Verification](https://github.com/heyvaldemar/romm-traefik-letsencrypt-docker-compose/actions/workflows/deployment-verification.yml?query=branch%3Amain) workflow runs on every push, pull request, and every day at 06:00 UTC: shellcheck and actionlint, a Trivy scan of each pinned image, and a deploy that first starts the previous release on the same volumes, upgrades it, and requires RomM's heartbeat through Traefik to report the version the compose file pins. It then runs the shipped restore scripts themselves: a marker written after a backup must be gone once that backup is restored, for the database and for the saves and states. Pin freshness is its own daily workflow, so this badge says whether the stack works, not whether a pin is one version behind.
 
-By utilizing this script, you can efficiently restore application data from an existing backup while ensuring proper coordination with the running service.
+---
 
-## Author
-
-hey everyone,
-
-💾 I’ve been in the IT game for over 20 years, cutting my teeth with some big names like [IBM](https://www.linkedin.com/in/heyvaldemar/), [Thales](https://www.linkedin.com/in/heyvaldemar/), and [Amazon](https://www.linkedin.com/in/heyvaldemar/). These days, I wear the hat of a DevOps Consultant and Team Lead, but what really gets me going is Docker and container technology - I’m kind of obsessed!
-
-💛 I have my own IT [blog](https://www.heyvaldemar.com/), where I’ve built a [community](https://discord.gg/AJQGCCBcqf) of DevOps enthusiasts who share my love for all things Docker, containers, and IT technologies in general. And to make sure everyone can jump on this awesome DevOps train, I write super detailed guides (seriously, they’re foolproof!) that help even newbies deploy and manage complex IT solutions.
-
-🚀 My dream is to empower every single person in the DevOps community to squeeze every last drop of potential out of Docker and container tech.
-
-🐳 As a [Docker Captain](https://www.docker.com/captains/vladimir-mikhalev/), I’m stoked to share my knowledge, experiences, and a good dose of passion for the tech. My aim is to encourage learning, innovation, and growth, and to inspire the next generation of IT whizz-kids to push Docker and container tech to its limits.
-
-Let’s do this together!
-
-## My 2D Portfolio
-
-🕹️ Click into [sre.gg](https://www.sre.gg/) — my virtual space is a 2D pixel-art portfolio inviting you to interact with elements that encapsulate the milestones of my DevOps career.
-
-## My Courses
-
-🎓 Dive into my [comprehensive IT courses](https://www.heyvaldemar.com/courses/) designed for enthusiasts and professionals alike. Whether you're looking to master Docker, conquer Kubernetes, or advance your DevOps skills, my courses provide a structured pathway to enhancing your technical prowess.
-
-🔑 [Each course](https://www.udemy.com/user/heyvaldemar/) is built from the ground up with real-world scenarios in mind, ensuring that you gain practical knowledge and hands-on experience. From beginners to seasoned professionals, there's something here for everyone to elevate their IT skills.
-
-## My Services
-
-💼 Take a look at my [service catalog](https://www.heyvaldemar.com/services/) and find out how we can make your technological life better. Whether it's increasing the efficiency of your IT infrastructure, advancing your career, or expanding your technological horizons — I'm here to help you achieve your goals. From DevOps transformations to building gaming computers — let's make your technology unparalleled!
-
-## Patreon Exclusives
-
-🏆 Join my [Patreon](https://www.patreon.com/heyvaldemar) and dive deep into the world of Docker and DevOps with exclusive content tailored for IT enthusiasts and professionals. As your experienced guide, I offer a range of membership tiers designed to suit everyone from newbies to IT experts.
-
-## My Recommendations
-
-📕 Check out my collection of [essential DevOps books](https://kit.co/heyvaldemar/essential-devops-books)\
-🖥️ Check out my [studio streaming and recording kit](https://kit.co/heyvaldemar/my-studio-streaming-and-recording-kit)\
-📡 Check out my [streaming starter kit](https://kit.co/heyvaldemar/streaming-starter-kit)
-
-## Follow Me
-
-🎬 [YouTube](https://www.youtube.com/channel/UCf85kQ0u1sYTTTyKVpxrlyQ?sub_confirmation=1)\
-🐦 [X / Twitter](https://twitter.com/heyvaldemar)\
-🎨 [Instagram](https://www.instagram.com/heyvaldemar/)\
-🐘 [Mastodon](https://mastodon.social/@heyvaldemar)\
-🧵 [Threads](https://www.threads.net/@heyvaldemar)\
-🎸 [Facebook](https://www.facebook.com/heyvaldemarFB/)\
-🧊 [Bluesky](https://bsky.app/profile/heyvaldemar.bsky.social)\
-🎥 [TikTok](https://www.tiktok.com/@heyvaldemar)\
-💻 [LinkedIn](https://www.linkedin.com/in/heyvaldemar/)\
-📣 [daily.dev Squad](https://app.daily.dev/squads/devopscompass)\
-🧩 [LeetCode](https://leetcode.com/u/heyvaldemar/)\
-🐈 [GitHub](https://github.com/heyvaldemar)
-
-## Community of IT Experts
-
-👾 [Discord](https://discord.gg/AJQGCCBcqf)
-
-## Refill My Coffee Supplies
-
-💖 [PayPal](https://www.paypal.com/paypalme/heyvaldemarCOM)\
-🏆 [Patreon](https://www.patreon.com/heyvaldemar)\
-💎 [GitHub](https://github.com/sponsors/heyvaldemar)\
-🥤 [BuyMeaCoffee](https://www.buymeacoffee.com/heyvaldemar)\
-🍪 [Ko-fi](https://ko-fi.com/heyvaldemar)
-
-🌟 **Bitcoin (BTC):** bc1q2fq0k2lvdythdrj4ep20metjwnjuf7wccpckxc\
-🔹 **Ethereum (ETH):** 0x76C936F9366Fad39769CA5285b0Af1d975adacB8\
-🪙 **Binance Coin (BNB):** bnb1xnn6gg63lr2dgufngfr0lkq39kz8qltjt2v2g6\
-💠 **Litecoin (LTC):** LMGrhx8Jsx73h1pWY9FE8GB46nBytjvz8g
-
-## Disclaimer
-
-This repository contains a Docker Compose configuration that references third-party Docker images. **I am not the creator or maintainer of these images** and have no control over their content. By using this configuration, you acknowledge that:
-
-1. **You are solely responsible** for verifying the contents, licensing, and legality of any third-party Docker images referenced in this repository.
-2. This configuration does **not include any ROM, BIOS, or other copyrighted files**. You are responsible for ensuring that any files you use comply with applicable licensing and copyright laws.
-3. **No liability** is assumed for any legal issues or damages that arise from the use or misuse of this configuration and the images it references.
-
-Please review all relevant licensing terms and only proceed if you have the legal right to use all components.
+## About the maintainer
 
 <div align="center">
 
-### Show some 💜 by starring some of the [repositories](https://github.com/heyValdemar?tab=repositories)!
+**Maintained by [Vladimir Mikhalev](https://github.com/heyvaldemar)** · Docker Captain · IBM Champion · AWS Community Builder
 
-![octocat](https://user-images.githubusercontent.com/10498744/210113490-e2fad07f-4488-4da8-a656-b9abbdd8cb26.gif)
+[YouTube](https://www.youtube.com/channel/UCf85kQ0u1sYTTTyKVpxrlyQ?sub_confirmation=1) · [Blog](https://heyvaldemar.com) · [LinkedIn](https://www.linkedin.com/in/heyvaldemar/)
 
 </div>
-
-![footer](https://user-images.githubusercontent.com/10498744/210157572-1fca0242-8af2-46a6-bfa3-666ffd40ebde.svg)
-
-## Security notes
-
-- **`.env` is tracked in this repository, and it carries live credentials.**
-  The credentials are `TRAEFIK_BASIC_AUTH`, `ROMM_DB_PASSWORD`, `ROMM_DB_ADMIN_PASSWORD`, `ROMM_AUTH_SECRET_KEY`, `ROMM_IGDB_CLIENT_ID`, `ROMM_IGDB_CLIENT_SECRET`, `ROMM_MOBYGAMES_API_KEY`, `ROMM_STEAMGRIDDB_API_KEY`. `.env.example` now lists every variable, and
-  `.gitignore` excludes `.env` — but adding it to `.gitignore` does not untrack
-  a file that is already tracked, and untracking it deletes it from any host
-  that pulls. The order matters:
-
-  ```bash
-  # 1. on the host that runs this stack, keep a copy
-  cp .env .env.keep
-  # 2. in a clone, stop tracking it and push
-  git rm --cached .env && git commit -m "chore: untrack .env" && git push
-  # 3. on the host, pull (which removes .env) and put it back
-  git pull && cp .env.keep .env && rm .env.keep
-  ```
-
-- **Rotate them afterwards.** The values are in the git history and cannot be
-  taken out of it, so untracking the file protects the next commit, not the
-  ones already made.
