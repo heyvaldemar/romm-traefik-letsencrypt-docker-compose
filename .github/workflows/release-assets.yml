@@ -118,10 +118,11 @@ jobs:
       actions: read
       id-token: write
       contents: write
-    # The SLSA generator must be referenced by tag, not SHA: it verifies its
-    # own reference at run time and refuses a SHA. OpenSSF Scorecard knows
-    # this workflow and does not count it as an unpinned dependency.
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    # Pinned by commit like every other action here. Referenced by tag, as
+    # the generator's README shows, Scorecard scored Pinned-Dependencies 8 on
+    # 96 repositories the same afternoon the workflow arrived; the generator
+    # accepts a full SHA, and Dependabot moves it.
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0
     with:
       base64-subjects: ${{ needs.archive.outputs.subjects }}
       provenance-name: ${{ github.event.repository.name }}-${{ needs.archive.outputs.tag }}.intoto.jsonl
