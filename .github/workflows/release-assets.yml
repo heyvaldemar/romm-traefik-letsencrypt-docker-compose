@@ -118,11 +118,13 @@ jobs:
       actions: read
       id-token: write
       contents: write
-    # Pinned by commit like every other action here. Referenced by tag, as
-    # the generator's README shows, Scorecard scored Pinned-Dependencies 8 on
-    # 96 repositories the same afternoon the workflow arrived; the generator
-    # accepts a full SHA, and Dependabot moves it.
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0
+    # Referenced by tag, and this is the one line in the fleet that is. The
+    # generator halts when referenced by commit (tested on 2026-09-24: it
+    # then reports the repository as private and stops, to keep a name out of
+    # the transparency log), and OpenSSF Scorecard scores this line as an
+    # unpinned dependency, 8 of 10, on every repository that carries it. The
+    # evidence page says so beside the score.
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       base64-subjects: ${{ needs.archive.outputs.subjects }}
       provenance-name: ${{ github.event.repository.name }}-${{ needs.archive.outputs.tag }}.intoto.jsonl
