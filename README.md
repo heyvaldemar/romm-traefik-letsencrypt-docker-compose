@@ -1,6 +1,7 @@
 # RomM + Traefik + Let's Encrypt on Docker Compose
 
 [![Deployment Verification](https://github.com/heyvaldemar/romm-traefik-letsencrypt-docker-compose/actions/workflows/deployment-verification.yml/badge.svg?branch=main)](https://github.com/heyvaldemar/romm-traefik-letsencrypt-docker-compose/actions/workflows/deployment-verification.yml)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14883/badge)](https://www.bestpractices.dev/projects/14883)
 
 This repository deploys [RomM](https://github.com/rommapp/romm) 5, a self-hosted manager for your game library with in-browser play, behind Traefik with automatic Let's Encrypt TLS, a MariaDB database, and a backups service whose restore scripts CI runs on every push.
 
