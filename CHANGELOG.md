@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_(no unreleased changes yet)_
+
+## [1.1.10] - 2026-10-23
+
 ### Changed
 
 - **`rommapp/romm:5.4.0` moved to `rommapp/romm:5.4.1`.** The freshness check reported the lag; the deploy job booted the stack on the new image before this landed.
