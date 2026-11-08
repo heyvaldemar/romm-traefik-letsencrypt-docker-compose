@@ -18,6 +18,9 @@
 # while every run was green.
 #
 # Set COMPOSE_PROJECT_NAME if the stack was started with a -p other than romm.
+# The password does not even leave it: the client reads MYSQL_PWD, set by the
+# shell inside, because an argument (docker exec -e NAME=value included) is
+# readable by every user on this host for as long as the restore runs.
 set -Eeuo pipefail
 
 PROJECT="${COMPOSE_PROJECT_NAME:-romm}"
@@ -35,7 +38,7 @@ APP="$(cid "$APP_SERVICE")"; BKP="$(cid backups)"
 
 env_of() { docker exec "$BKP" printenv "$1"; }
 DIR="$(env_of MARIADB_BACKUPS_PATH)"; NAME="$(env_of MARIADB_BACKUP_NAME)"
-DB_USER="$(env_of ROMM_DB_USER)"; DB_PASS="$(env_of ROMM_DB_PASSWORD)"
+DB_USER="$(env_of ROMM_DB_USER)"
 
 SELECTED="${1:-}"
 if [ -z "$SELECTED" ]; then
@@ -52,7 +55,8 @@ docker stop "$APP" >/dev/null
 restart() { docker start "$APP" >/dev/null && echo "Started $APP_SERVICE"; }
 trap 'restart' EXIT
 echo "Restoring $SELECTED"
-if ! docker exec -e MYSQL_PWD="$DB_PASS" "$BKP" bash -c "set -euo pipefail
+if ! docker exec "$BKP" bash -c "set -euo pipefail
+    MYSQL_PWD=\"\$ROMM_DB_PASSWORD\"; export MYSQL_PWD
     mariadb -h mariadb -u '$DB_USER' -e 'DROP DATABASE IF EXISTS \`$DB_NAME\`; CREATE DATABASE \`$DB_NAME\`;'
     gunzip -c '$DIR/$SELECTED' | mariadb -h mariadb -u '$DB_USER' '$DB_NAME'"; then
   echo "error: the restore failed part-way. The database may now be empty: restore another backup before using RomM." >&2
